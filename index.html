@@ -140,29 +140,11 @@ const CONFIG = {
   // マップID（Google Cloudで作成。テスト中は "DEMO_MAP_ID" でも動きます）
   mapId: "DEMO_MAP_ID",
 
-  // 地点データ
-  //   id   : 半角英数字。共有URLの末尾（#id）に使われます
-  //   lat/lng : Googleマップで地点を右クリック → 数字をクリックでコピーできます
-  //   ig   : Instagram投稿のURL（複数可）
-  //   note : 一言メモ（省略可）
-  spots: [
-    {
-      id: "sample-1",
-      name: "サンプル地点A",
-      lat: 34.2306, lng: 135.1708,
-      note: "ここに一言メモ",
-      ig: ["https://www.instagram.com/p/XXXXXXXXXXX/"]
-    },
-    {
-      id: "sample-2",
-      name: "サンプル地点B",
-      lat: 34.2260, lng: 135.1675,
-      ig: [
-        "https://www.instagram.com/p/YYYYYYYYYYY/",
-        "https://www.instagram.com/reel/ZZZZZZZZZZZ/"
-      ]
-    }
-  ]
+  // 地点データの置き場所。投稿管理画面（GAS）がこのファイルを書き換える
+  spotsUrl: "spots.json",
+
+  // 地点が0件のときの地図の中心
+  fallbackCenter: { lat: 34.2306, lng: 135.1708 }
 };
 /* ========================================================= */
 
@@ -202,13 +184,34 @@ function loadInstagram() {
   document.body.appendChild(s);
 }
 
+/* 地点データ（spots.json）を読む。投稿管理画面がこのファイルを書き換える */
+async function loadSpots() {
+  const url = CONFIG.spotsUrl + (CONFIG.spotsUrl.includes("?") ? "&" : "?") + "v=" + Date.now();
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error("spots.json を読めませんでした（" + res.status + "）");
+  const data = await res.json();
+  const list = Array.isArray(data) ? data : (data.spots || []);
+  return list.filter(s => s && s.id && Number.isFinite(Number(s.lat)) && Number.isFinite(Number(s.lng)))
+             .map(s => ({
+               id: String(s.id),
+               name: String(s.name || s.id),
+               lat: Number(s.lat),
+               lng: Number(s.lng),
+               note: String(s.note || ""),
+               ig: Array.isArray(s.ig) ? s.ig : []
+             }));
+}
+
 async function init() {
-  const { Map } = await google.maps.importLibrary("maps");
-  const { AdvancedMarkerElement, PinElement } = await google.maps.importLibrary("marker");
+  const [{ Map }, { AdvancedMarkerElement, PinElement }, spots] = await Promise.all([
+    google.maps.importLibrary("maps"),
+    google.maps.importLibrary("marker"),
+    loadSpots()
+  ]);
 
   const map = new Map($("map"), {
     mapId: CONFIG.mapId,
-    center: { lat: CONFIG.spots[0]?.lat ?? 34.23, lng: CONFIG.spots[0]?.lng ?? 135.17 },
+    center: spots.length ? { lat: spots[0].lat, lng: spots[0].lng } : CONFIG.fallbackCenter,
     zoom: 14,
     gestureHandling: "greedy",
     mapTypeControl: false,
@@ -220,7 +223,7 @@ async function init() {
   const bounds = new google.maps.LatLngBounds();
   const byId = {};
 
-  CONFIG.spots.forEach(spot => {
+  spots.forEach(spot => {
     const pin = new PinElement({ background: accent, borderColor: "#ffffff", glyphColor: "#ffffff" });
     const marker = new AdvancedMarkerElement({
       map, position: { lat: spot.lat, lng: spot.lng },
@@ -231,7 +234,10 @@ async function init() {
     byId[spot.id] = spot;
   });
 
-  if (CONFIG.spots.length > 1) map.fitBounds(bounds, 60);
+  if (spots.length > 1) map.fitBounds(bounds, 60);
+  if (!spots.length) {
+    $("title").innerHTML = `${esc(CONFIG.title)}<small>準備中です。地点が登録されるとここに表示されます。</small>`;
+  }
 
   $("close").addEventListener("click", closeSheet);
   document.addEventListener("keydown", e => { if (e.key === "Escape") closeSheet(); });
